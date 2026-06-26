@@ -1,0 +1,99 @@
+name: wikimedia-realtime-pipeline
+
+# Tüm servislerin konuştuğu ortak ağ
+networks:
+  stream_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+
+services:
+
+  # ── 1. Kafka (KRaft modu — Zookeeper yok, tek node) ────────────────────────
+  kafka:
+    image: apache/kafka:3.8.0
+    container_name: kafka
+    networks:
+      - stream_net
+    ports:
+      - "29092:29092"          # Host'tan (debug için) erişim
+    environment:
+      # KRaft: broker + controller aynı node'da
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+
+      # İki dinleyici: INTERNAL (container'lar arası) + HOST (senin makinen)
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,HOST:PLAINTEXT
+
+      # Tek node olduğu için tüm replikasyon faktörleri 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # ── 2. Producer (Wikimedia SSE → Kafka) ───────────────────────────────────
+  producer:
+    build: ./producer
+    container_name: wiki_producer
+    networks:
+      - stream_net
+    depends_on:
+      kafka:
+        condition: service_healthy   # Kafka hazır olmadan başlama
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092    # container içinden INTERNAL listener
+      KAFKA_TOPIC: wiki.changes
+    restart: unless-stopped          # akış koparsa container'ı yeniden başlat
+
+  # ── 3. PostgreSQL (gerçek-zamanlı özetlerin yazıldığı yer) ─────────────────
+  postgres:
+    image: postgres:15
+    container_name: stream_postgres
+    networks:
+      - stream_net
+    environment:
+      POSTGRES_USER: stream
+      POSTGRES_PASSWORD: stream
+      POSTGRES_DB: wikistream
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "stream"]
+      interval: 10s
+      retries: 5
+
+  # ── 4. Consumer (Kafka → PostgreSQL özetleri) ──────────────────────────────
+  consumer:
+    build: ./consumer
+    container_name: wiki_consumer
+    networks:
+      - stream_net
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      KAFKA_TOPIC: wiki.changes
+      KAFKA_GROUP_ID: wiki-consumer
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: wikistream
+      DB_USER: stream
+      DB_PASSWORD: stream
+    restart: unless-stopped

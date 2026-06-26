@@ -1,0 +1,11 @@
+# Python sanal ortam ve cache
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Ortam değişkenleri
+.env
+
+# macOS
+.DS_Store
