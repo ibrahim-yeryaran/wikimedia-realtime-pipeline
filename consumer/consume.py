@@ -1,16 +1,16 @@
 """
 consume.py
 ----------
-Kafka'daki `wiki.changes` topic'ini tüketir ve her olayı PostgreSQL'deki
-özet tablolarına yazar (upsert ile çalışan sayaçlar).
+Consumes the `wiki.changes` Kafka topic and writes each event into the
+summary tables in PostgreSQL (running counters via upserts).
 
-Teslimat semantiği: **at-least-once**.
-  - Önce DB'ye yazıp commit ediyoruz, SONRA Kafka offset'ini commit ediyoruz.
-  - Böylece bir çökme olursa en kötü ihtimalle bazı olaylar tekrar işlenir
-    (kaybolmaz). Upsert'ler toplamı artırdığı için bunu README'de not ederiz.
+Delivery semantics: **at-least-once**.
+  - We write + commit to the DB FIRST, then commit the Kafka offset.
+  - So on a crash, at worst some events are reprocessed (never lost). Since the
+    upserts increment totals, we note this in the README.
 """
 
-# Tip ipuçlarını lazy yapar → `dict | None` eski Python sürümlerinde de çalışır
+# Makes type hints lazy → `dict | None` also works on older Python versions
 from __future__ import annotations
 
 import json
@@ -26,7 +26,7 @@ from confluent_kafka import Consumer, KafkaError
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger("consumer")
 
-# ── Ayarlar ───────────────────────────────────────────────────────────────────
+# ── Settings ──────────────────────────────────────────────────────────────────
 BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "localhost:29092")
 TOPIC = os.getenv("KAFKA_TOPIC", "wiki.changes")
 GROUP_ID = os.getenv("KAFKA_GROUP_ID", "wiki-consumer")
@@ -39,7 +39,7 @@ DB_CONF = {
     "password": os.getenv("DB_PASSWORD", "stream"),
 }
 
-# Kaç olayda bir DB commit + offset commit yapılacağı
+# How many events between each DB commit + offset commit
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "50"))
 
 UPSERT_TOTALS = """
@@ -60,7 +60,7 @@ UPSERT_PER_MINUTE = """
 
 
 def parse_event(raw: bytes) -> dict | None:
-    """Kafka mesajını işlenebilir bir özete dönüştürür; geçersizse None."""
+    """Turn a Kafka message into a processable summary; None if invalid."""
     try:
         evt = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
@@ -78,7 +78,7 @@ def parse_event(raw: bytes) -> dict | None:
     return {
         "server": server,
         "ts": when,
-        "bucket": when.replace(second=0, microsecond=0),  # dakikaya yuvarla
+        "bucket": when.replace(second=0, microsecond=0),  # truncate to the minute
         "bytes": bytes_change,
     }
 
@@ -88,14 +88,14 @@ def run() -> None:
         {
             "bootstrap.servers": BOOTSTRAP,
             "group.id": GROUP_ID,
-            "auto.offset.reset": "latest",   # ilk çalışmada en yeniden başla
-            "enable.auto.commit": False,     # offset'i biz elle commit edeceğiz
+            "auto.offset.reset": "latest",   # on first run, start from the newest
+            "enable.auto.commit": False,     # we commit offsets manually
         }
     )
     consumer.subscribe([TOPIC])
 
     conn = psycopg2.connect(**DB_CONF)
-    log.info("Consumer başladı → topic=%s, grup=%s", TOPIC, GROUP_ID)
+    log.info("Consumer started → topic=%s, group=%s", TOPIC, GROUP_ID)
 
     running = True
 
@@ -115,7 +115,7 @@ def run() -> None:
                 continue
             if msg.error():
                 if msg.error().code() != KafkaError._PARTITION_EOF:
-                    log.error("Kafka hatası: %s", msg.error())
+                    log.error("Kafka error: %s", msg.error())
                 continue
 
             record = parse_event(msg.value())
@@ -129,14 +129,14 @@ def run() -> None:
             pending += 1
             processed += 1
 
-            # Batch dolunca: önce DB commit, sonra Kafka offset commit (at-least-once)
+            # When the batch is full: commit the DB first, then the Kafka offset (at-least-once)
             if pending >= BATCH_SIZE:
                 conn.commit()
                 consumer.commit(asynchronous=False)
                 pending = 0
-                log.info("%d olay işlendi (DB'ye yazıldı)", processed)
+                log.info("%d events processed (written to DB)", processed)
     finally:
-        log.info("Kapatılıyor, kalan %d olay commit ediliyor...", pending)
+        log.info("Shutting down, committing remaining %d events...", pending)
         conn.commit()
         consumer.commit(asynchronous=False)
         conn.close()

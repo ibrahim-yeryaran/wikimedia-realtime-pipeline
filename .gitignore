@@ -1,10 +1,10 @@
-# Python sanal ortam ve cache
+# Python virtual environment and cache
 .venv/
 venv/
 __pycache__/
 *.pyc
 
-# Ortam değişkenleri
+# Environment variables
 .env
 
 # macOS

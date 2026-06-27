@@ -2,11 +2,11 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Önce bağımlılıklar (Docker katman cache'i için)
+# Dependencies first (for Docker layer caching)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY produce.py .
 
-# -u: çıktıyı tamponlamadan logla (container loglarında anında görünsün)
+# -u: log output unbuffered (shows up immediately in container logs)
 CMD ["python", "-u", "produce.py"]

@@ -1,6 +1,6 @@
 name: wikimedia-realtime-pipeline
 
-# Tüm servislerin konuştuğu ortak ağ
+# Shared network all services talk over
 networks:
   stream_net:
     driver: bridge
@@ -10,28 +10,28 @@ volumes:
 
 services:
 
-  # ── 1. Kafka (KRaft modu — Zookeeper yok, tek node) ────────────────────────
+  # ── 1. Kafka (KRaft mode — no Zookeeper, single node) ──────────────────────
   kafka:
     image: apache/kafka:3.8.0
     container_name: kafka
     networks:
       - stream_net
     ports:
-      - "29092:29092"          # Host'tan (debug için) erişim
+      - "29092:29092"          # access from the host (for debugging)
     environment:
-      # KRaft: broker + controller aynı node'da
+      # KRaft: broker + controller on the same node
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
 
-      # İki dinleyici: INTERNAL (container'lar arası) + HOST (senin makinen)
+      # Two listeners: INTERNAL (between containers) + HOST (your machine)
       KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,HOST://0.0.0.0:29092
       KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,HOST://localhost:29092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,HOST:PLAINTEXT
 
-      # Tek node olduğu için tüm replikasyon faktörleri 1
+      # All replication factors are 1 because this is a single node
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
@@ -50,13 +50,13 @@ services:
       - stream_net
     depends_on:
       kafka:
-        condition: service_healthy   # Kafka hazır olmadan başlama
+        condition: service_healthy   # don't start before Kafka is ready
     environment:
-      KAFKA_BOOTSTRAP: kafka:9092    # container içinden INTERNAL listener
+      KAFKA_BOOTSTRAP: kafka:9092    # INTERNAL listener from inside the container
       KAFKA_TOPIC: wiki.changes
-    restart: unless-stopped          # akış koparsa container'ı yeniden başlat
+    restart: unless-stopped          # restart the container if the stream drops
 
-  # ── 3. PostgreSQL (gerçek-zamanlı özetlerin yazıldığı yer) ─────────────────
+  # ── 3. PostgreSQL (where the real-time summaries are written) ──────────────
   postgres:
     image: postgres:15
     container_name: stream_postgres
@@ -76,7 +76,7 @@ services:
       interval: 10s
       retries: 5
 
-  # ── 4. Consumer (Kafka → PostgreSQL özetleri) ──────────────────────────────
+  # ── 4. Consumer (Kafka → PostgreSQL summaries) ─────────────────────────────
   consumer:
     build: ./consumer
     container_name: wiki_consumer

@@ -1,22 +1,22 @@
--- PostgreSQL container ilk açıldığında bir kez çalışır.
--- Consumer'ın gerçek-zamanlı yazacağı özet (aggregate) tablolarını kurar.
+-- Runs once when the PostgreSQL container is first created.
+-- Sets up the summary (aggregate) tables the consumer writes to in real time.
 
--- 1) Wiki bazında çalışan toplamlar (anlık "en aktif wiki'ler" için)
+-- 1) Running totals per wiki (for an instant "most active wikis" view)
 CREATE TABLE IF NOT EXISTS wiki_totals (
-    server_name        VARCHAR(100) PRIMARY KEY,   -- ör. en.wikipedia.org
+    server_name        VARCHAR(100) PRIMARY KEY,   -- e.g. en.wikipedia.org
     total_edits        BIGINT       NOT NULL DEFAULT 0,
-    total_bytes_change BIGINT       NOT NULL DEFAULT 0,  -- net byte değişimi
+    total_bytes_change BIGINT       NOT NULL DEFAULT 0,  -- net byte change
     last_seen_at       TIMESTAMPTZ  NOT NULL
 );
 
--- 2) Dakikalık trafik (zaman serisi: "dakikada kaç düzenleme")
+-- 2) Per-minute traffic (time series: "edits per minute")
 CREATE TABLE IF NOT EXISTS edits_per_minute (
-    minute_bucket  TIMESTAMPTZ  NOT NULL,           -- dakikaya yuvarlanmış zaman
+    minute_bucket  TIMESTAMPTZ  NOT NULL,           -- time truncated to the minute
     server_name    VARCHAR(100) NOT NULL,
     edit_count     BIGINT       NOT NULL DEFAULT 0,
     PRIMARY KEY (minute_bucket, server_name)
 );
 
--- Zaman-aralığı sorgularını hızlandırmak için
+-- Speeds up time-range queries
 CREATE INDEX IF NOT EXISTS idx_epm_bucket
     ON edits_per_minute (minute_bucket DESC);
