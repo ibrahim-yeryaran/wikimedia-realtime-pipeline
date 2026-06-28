@@ -1,5 +1,7 @@
 # 📡 Wikimedia Real-Time Streaming Pipeline
 
+[![CI](https://github.com/ibrahim-yeryaran/wikimedia-realtime-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/ibrahim-yeryaran/wikimedia-realtime-pipeline/actions/workflows/ci.yml)
+
 A **real-time data streaming pipeline** that ingests Wikipedia's live edit feed,
 streams it through **Apache Kafka**, and computes running aggregates in
 **PostgreSQL** — all containerized with **Docker Compose**.
